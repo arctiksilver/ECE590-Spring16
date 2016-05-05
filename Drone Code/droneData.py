@@ -23,31 +23,31 @@ class droneInput:
             self.throttle = 0.0
             self.yaw = 0.0
             self.pitch = 0.0
-            self.role = 0.0
+            self.roll = 0.0
         else:
             self.throttle = data[0]
             self.yaw = data[1]
             self.pitch = data[2]
-            self.role = data[3]
+            self.roll = data[3]
 
 class axis:
     def __init__(self, data = None):
         if data is None:
-            self.x = 0.0
-            self.y = 0.0
-            self.z = 0.0
+            self.pitch = 0.0
+            self.roll = 0.0
+            self.yaw = 0.0
         else:
-            self.x = data[0]
-            self.y = data[1]
-            self.z = data[2]
+            self.pitch = data[0]
+            self.roll = data[1]
+            self.yaw = data[2]
             
 class euler:
     def __init__(self, data = None):
         if data is None:
             self.heading = 0.0
-            self.role = 0.0
+            self.roll = 0.0
             self.pitch = 0.0
         else:
             self.heading = data[0]
-            self.role = data[1]
+            self.roll = data[1]
             self.pitch = data[2]

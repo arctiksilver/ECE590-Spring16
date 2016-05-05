@@ -25,33 +25,40 @@ pwm = Adafruit_PCA9685.PCA9685()
 
 pids = [PID.PID() for i in range(6)]
 
-pids[PID_PITCH_RATE].setKp(0.7)
+pids[PID_PITCH_RATE].setKp(0.5)
+#pids[PID_PITCH_RATE].setKd(0.1)
 #pids[PID_PITCH_RATE].setKi(1)
-pids[PID_PITCH_RATE].setWindup(50)
 
-pids[PID_ROLL_RATE].setKp(0.7)
+pids[PID_ROLL_RATE].setKp(0.5)
+#pids[PID_ROLL_RATE].setKd(0.1)
 #pids[PID_ROLL_RATE].setKi(1)
-pids[PID_ROLL_RATE].setWindup(50)
 
 pids[PID_YAW_RATE].setKp(2.5)
 #pids[PID_YAW_RATE].setKi(1)
-pids[PID_YAW_RATE].setWindup(50)
 
-pids[PID_PITCH_STAB].setKp(4.5)
-pids[PID_ROLL_STAB].setKp(4.5)
+pids[PID_PITCH_STAB].setKp(7.5)
+pids[PID_ROLL_STAB].setKp(7.5)
 pids[PID_YAW_STAB].setKp(10)
 
-# Variables
-Calibrated = False
 
 # Configure PWM output frequency
-pwm.set_pwm_freq(400) # Produces measured output frequency ~420Hz
+pwm.set_pwm_freq(450)
 
 # set output to ESC minimum throttle
-pwm.set_pwm(motor_FL, 0, 1900)
-pwm.set_pwm(motor_FR, 0, 1900)
-pwm.set_pwm(motor_BL, 0, 1900)
-pwm.set_pwm(motor_BR, 0, 1900)
+pwm.set_pwm(motor_FL, 0, 2000)
+pwm.set_pwm(motor_FR, 0, 2000)
+pwm.set_pwm(motor_BL, 0, 2000)
+pwm.set_pwm(motor_BR, 0, 2000)
+time.sleep(0.01)
+pwm.set_pwm(motor_FL, 0, 3300)
+pwm.set_pwm(motor_FR, 0, 3300)
+pwm.set_pwm(motor_BL, 0, 3300)
+pwm.set_pwm(motor_BR, 0, 3300)
+time.sleep(0.01)
+pwm.set_pwm(motor_FL, 0, 2000)
+pwm.set_pwm(motor_FR, 0, 2000)
+pwm.set_pwm(motor_BL, 0, 2000)
+pwm.set_pwm(motor_BR, 0, 2000)
 
 # configure socket connection
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
@@ -74,16 +81,21 @@ if status == 0x01:
     print('System error: {0}'.format(error))
 
 def calibrate():
-    while Calibrated == False:
+    cal = False
+    i = 0
+    while cal == False:
         # Read the calibration status, 0=uncalibrated and 3=fully calibrated.
         sys, gyro, accel, mag = bno.get_calibration_status()
         pwm.set_pwm(SYS_CAL_LED,0, 1365*sys)
         pwm.set_pwm(GYRO_CAL_LED,0, 1365*gyro)
         pwm.set_pwm(ACCEL_CAL_LED,0, 1365*accel)
         pwm.set_pwm(MAG_CAL_LED,0, 1365*mag)
-    
+        print sys, gyro, accel, mag
+        time.sleep(0.1)
         if(sys==gyro==accel==mag==3):
-            Calibrated = True
+            i += 1
+            if i == 10:
+                cal = True
 # End calibrate()
 
 def wrap_180(x):
@@ -95,6 +107,9 @@ def wrap_180(x):
 
 def map(x, in_min, in_max, out_min, out_max):
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+    
+def clamp(n, minn, maxn): 
+    return min(max(n, minn), maxn)
 
 def setThrottle(throttle):
     return int(map(throttle, 0, 1000, 2000, 3200))
@@ -106,126 +121,98 @@ def setMotors(throttle):
     pwm.set_pwm(motor_BR, 0, throttle)    
 
 def flightControl():
-    current = droneInput()
+    desired = droneInput()
+    yaw_target = 0.0
     count = 0
     flying = False
-    pidGain = 10
+    pidGain = 15
+    userGain = 10
+    stabClampRange = 250
+    rateClampRange = 500
     
     while True:
-        count += 1
+        #count += 1
         try:
             # get user input
             data, addr = sock.recvfrom(1024)
-            user = droneInput(struct.unpack('ffff', data))
-            current.throttle += user.throttle*40
-            if current.throttle > 1000:
-                current.throttle = 1000
-            elif current.throttle < 0:
-                current.throttle = 0
-            current.yaw = user.yaw*20
-            current.pitch = user.pitch*20
-            current.role = user.role*20
-            #current.yaw += user.yaw
-            #current.yaw = wrap_180(current.yaw)
-            #setMotors(int(map(current.throttle, 0, 1000, 2000, 3200)))
-            #print current.throttle
+            rc = droneInput(struct.unpack('ffff', data))
+            desired.throttle += rc.throttle*50
+            if desired.throttle > 1000:
+                desired.throttle = 1000
+            elif desired.throttle < 0:
+                desired.throttle = 0
+
+            desired.yaw = map(rc.yaw, -0.5, 0.5, -50, 50)
+            desired.pitch = map(rc.pitch, -0.5, 0.5, -15, 15)
+            desired.roll = -map(rc.roll, -0.5, 0.5, -15, 15)
+
         except socket.error:
             pass
         
-        if current.throttle > 50:
+        
+        imu = euler(bno.read_euler())
+        imu.heading = imu.heading - 180
+        gyro = axis(bno.read_gyroscope())
+        
+        
+        if desired.throttle > 100:
             if flying == False:
                 for pid in pids:
                     pid.clear()
-                    flying = True
+                pids[PID_YAW_RATE].setWindup(50)
+                pids[PID_PITCH_RATE].setWindup(50)
+                pids[PID_ROLL_RATE].setWindup(50)
+                flying = True
+                imu = euler(bno.read_euler())
+                desired.yaw = imu.heading
+                yaw_target = desired.yaw
             
-            # set goal rate into PIDs
-            pids[PID_YAW_RATE].SetPoint = current.yaw
-            pids[PID_PITCH_RATE].SetPoint = -current.pitch
-            pids[PID_ROLL_RATE].SetPoint = current.role
+            yaw_stab_output = clamp(pids[PID_YAW_STAB].update(wrap_180(yaw_target - imu.heading)), -stabClampRange, stabClampRange)
+            pitch_stab_output = clamp(pids[PID_PITCH_STAB].update(desired.pitch - imu.pitch), -stabClampRange, stabClampRange)
+            roll_stab_output = clamp(pids[PID_ROLL_STAB].update(desired.roll - imu.roll), -stabClampRange, stabClampRange)
             
-            # get current gyro reading
-            gyro = axis(bno.read_gyroscope())
+            if abs(desired.yaw) > 5:
+                yaw_stab_output = desired.yaw
+                yaw_target = imu.heading
             
-            # get output from PIDs
-            pids[PID_YAW_RATE].update(gyro.z)
-            yaw_output = pids[PID_YAW_RATE].output*pidGain
-            pids[PID_PITCH_RATE].update(gyro.x)
-            pitch_output = pids[PID_PITCH_RATE].output*pidGain
-            pids[PID_ROLL_RATE].update(gyro.y)
-            roll_output = pids[PID_ROLL_RATE].output*pidGain
+            yaw_output = clamp(pids[PID_YAW_RATE].update(yaw_stab_output - gyro.yaw), -rateClampRange, rateClampRange)
+            pitch_output = clamp(pids[PID_PITCH_RATE].update(pitch_stab_output - gyro.pitch), -rateClampRange, rateClampRange)
+            roll_output = clamp(pids[PID_ROLL_RATE].update(roll_stab_output - gyro.roll), -rateClampRange, rateClampRange)
+            
+            #yaw_output = 0
             
             # command motors
-            throttle_output = map(current.throttle, 0, 1000, 2000, 3200)
+            throttle_output = map(desired.throttle, 0, 1000, 2000, 3200)
             
-            FL_out = int(throttle_output + roll_output + pitch_output)
-            BL_out = int(throttle_output + roll_output - pitch_output)
-            FR_out = int(throttle_output - roll_output + pitch_output)
-            BR_out = int(throttle_output - roll_output - pitch_output)
+            FL_out = int(throttle_output - roll_output - pitch_output - yaw_output)
+            BL_out = int(throttle_output - roll_output + pitch_output + yaw_output)
+            FR_out = int(throttle_output + roll_output - pitch_output + yaw_output)
+            BR_out = int(throttle_output + roll_output + pitch_output - yaw_output)
             
             pwm.set_pwm(motor_FL, 0, FL_out)
             pwm.set_pwm(motor_BL, 0, BL_out)
             pwm.set_pwm(motor_FR, 0, FR_out)
             pwm.set_pwm(motor_BR, 0, BR_out)
             
-            if count > 15:
-                #print throttle_output, roll_output, pitch_output
-                print 'FL =', FL_out, 'BL =', BL_out, 'FR =', FR_out, 'BR =', BR_out
-                count = 0
+            #if count > 15:
+             #   print throttle_output, roll_output, pitch_output
+             #   print 'IMU', imu.heading, imu.pitch, imu.roll
+             #   print 'PID out', yaw_output, pitch_output, roll_output
+             #   print 'FL =', FL_out, 'BL =', BL_out, 'FR =', FR_out, 'BR =', BR_out
+             #   count = 0
         else:
             flying = False
-            pwm.set_pwm(motor_FL, 0, 1900)
-            pwm.set_pwm(motor_FR, 0, 1900)
-            pwm.set_pwm(motor_BL, 0, 1900)
-            pwm.set_pwm(motor_BR, 0, 1900)
+            pwm.set_pwm(motor_FL, 0, 2000)
+            pwm.set_pwm(motor_FR, 0, 2000)
+            pwm.set_pwm(motor_BL, 0, 2000)
+            pwm.set_pwm(motor_BR, 0, 2000)
             
-            
-            
-            # Read the Euler angles for heading, roll, pitch (all in degrees)
-            #sensor = euler(bno.read_euler())
-            #sensor.heading = wrap_180(sensor.heading - 180)
-            #print sensor.heading, sensor.role, sensor.pitch
-            # Gyroscope data (in degrees per second)
-            #gyro = axis(bno.read_gyroscope())
-            #print gyro.x, gyro.y, gyro.z
-            #count = 0
-
-        # PID for role
-    
-        # PID for pitch
-   
-        # PID for yaw
-    
-    
-    
-        # combine PID data and send to motors
-    
-    
-    
-    
-        # Print everything out.
-        #print('Heading={0:0.2F} Roll={1:0.2F} Pitch={2:0.2F}\tSys_cal={3} Gyro_cal={4} Accel_cal={5} Mag_cal={6}'.format(heading, roll, pitch, sys, gyro, accel, mag))
-        # Other values you can optionally read:
-        # Orientation as a quaternion:
-        #x,y,z,w = bno.read_quaterion()
-        # Sensor temperature in degrees Celsius:
-        #temp_c = bno.read_temp()
-        # Magnetometer data (in micro-Teslas):
-        #x,y,z = bno.read_magnetometer()
-        # Gyroscope data (in degrees per second):
-        #x,y,z = bno.read_gyroscope()
-        #print('Gyroscope x={0:0.2F} y={1:0.2F} z={2:0.2F}'.format(x,y,z))
-        # Accelerometer data (in meters per second squared):
-        #x,y,z = bno.read_accelerometer()
-        # Linear acceleration data (i.e. acceleration from movement, not gravity--
-        # returned in meters per second squared):
-        #x,y,z = bno.read_linear_acceleration()
-        # Gravity acceleration data (i.e. acceleration just from gravity--returned
-        # in meters per second squared):
-        #x,y,z = bno.read_gravity()
-        # Sleep for a second until the next reading.
-        time.sleep(0.02)
+        time.sleep(0.01)
     
 
+
+# calibrate BNO055 sensor
+calibrate()
 # start the controller  
 flightControl()
 
